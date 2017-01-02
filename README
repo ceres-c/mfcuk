@@ -2,7 +2,8 @@ README
 ======
 
 Compiling:
-    automake
+    aclocal
+    automake --add-missing
     autoconf
     ./configure
     make
