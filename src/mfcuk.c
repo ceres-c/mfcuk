@@ -184,6 +184,9 @@ static inline uint64_t bswap_64(uint64_t x)
 #include <sys/types.h>
 #endif
 
+// for getopt()
+extern char *optarg;
+
 // NFC
 #include <nfc/nfc.h>
 #include <nfc/nfc-types.h>
