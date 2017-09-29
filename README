@@ -1,7 +1,7 @@
 README
 ======
 
-This is a frankenrepo made mergin different commits from other forks available, but it is compiling correctly.
+This is a frankenrepo made merging different commits from other forks available, but it is compiling correctly.
 
 Dependencies:
     apt-get install build-essential libnfc-dev autoconf automake libtool pkg-config
