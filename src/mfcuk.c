@@ -222,12 +222,18 @@ static uint32_t bswap_32_pu8(uint8_t *pu8)
 }
 
 extern mfcuk_finger_tmpl_entry mfcuk_finger_db[];
+
 extern int mfcuk_finger_db_entries;
+
+uint8_t hicnt[1 << 24] = {0}, locnt[1 << 24] = {0};
+
+uint8_t weak_mifare_threshold = 0;
 
 // TODO: rename the array and number of items in array variable names
 tag_nonce_entry_t arrSpoofEntries[MAX_TAG_NONCES]; // "Cache" array of already received tag nonces, since we cannot 100% fix one tag nonce as of now
 uint32_t numSpoofEntries = 0; // Actual number of entries in the arrSpoofEntries
 uint32_t numAuthAttempts = 0; // Number of authentication attempts for Recovery of keys - used to statistics. TODO: implement proper statistics with timings, number of tries, etc.
+uint32_t numHit4 = 0; // Number of 4-bit responses
 bool bfOpts[256] = {false}; // Command line options, indicates their presence, initialize with false
 uint8_t verboseLevel = 0; // No verbose level by default
 
@@ -618,6 +624,7 @@ static uint32_t mfcuk_key_recovery_block(nfc_device *pnd, uint32_t uiUID, uint64
 
   // zveriu - Successful: either authentication (szRx == 32) either encrypted 0x5 reponse (szRx == 4)
   if (res == 4) {
+    ++numHit4;
     //printf("INFO - 4-bit (szRx=%d) error code 0x5 encrypted (abtRx=0x%02x)\n", szRx, abtRx[0] & 0xf);
 
     if (ptrFoundTagNonceEntry->current_out_of_8 < 0) {
@@ -648,20 +655,47 @@ static uint32_t mfcuk_key_recovery_block(nfc_device *pnd, uint32_t uiUID, uint64
         }
 
         states_list = lfsr_common_prefix(ptrFoundTagNonceEntry->spoofNrPfx, ptrFoundTagNonceEntry->spoofArEnc, ptrFoundTagNonceEntry->ks, ptrFoundTagNonceEntry->parBitsArr);
-
-        for (i = 0; (states_list) && ((states_list + i)->odd != 0 || (states_list + i)->even != 0) && (i < MAX_COMMON_PREFIX_STATES); i++) {
+	
+	for (i = 0; (states_list) && ((states_list + i)->odd != 0 || (states_list + i)->even != 0) && (i < (MAX_COMMON_PREFIX_STATES<<4)); i++) {
           current_state = states_list + i;
           lfsr_rollback_word(current_state, uiUID ^ ptrFoundTagNonceEntry->tagNonce, 0);
           crypto1_get_lfsr(current_state, &key_recovered);
-
-          if (bfOpts['v'] && (verboseLevel > 1)) {
-            printf("\nINFO: block %d recovered KEY: %012"PRIx64"\n", uiBlock, key_recovered);
+          ++hicnt[(key_recovered >> 24) & 0xffffff];
+          ++locnt[key_recovered & 0xffffff];
+          if(weak_mifare_mode == false) {
+        	  if (bfOpts['v'] && (verboseLevel > 1)) {
+        		  printf("\nINFO: block %d recovered KEY: %012"PRIx64"\n", uiBlock, key_recovered);
+        	  }
+        	  flag_key_recovered = 1;
+        	  *ui64KeyRecovered = key_recovered;
           }
-
-          flag_key_recovered = 1;
-
-          *ui64KeyRecovered = key_recovered;
         }
+	if(weak_mifare_mode == true) {
+		if (bfOpts['v'] && (verboseLevel > 2))
+			printf("\nINFO: %d candidates found, nonce %08x\n", i, ptrFoundTagNonceEntry->tagNonce);
+		int maxhi = 0;
+		int maxlo = 0;
+		int maxhii = 0;
+		int maxloi = 0;
+		for (i = 0; i < (1 << 24); ++i) {
+			if (hicnt[i] > maxhi){
+				maxhi = hicnt[i];
+				maxhii = i;
+			}
+			if (locnt[i] > maxlo){
+				maxlo = locnt[i];
+				maxloi = i;
+			}
+		}
+		if (bfOpts['v'] && (verboseLevel > 2))
+			printf("\nINFO: maxhi=%d maxhii=%08x maxlo=%d maxloi=%08x\n", maxhi, maxhii, maxlo, maxloi);
+		if(maxhi >= weak_mifare_threshold && maxlo >= weak_mifare_threshold)
+		{
+			flag_key_recovered = 1;
+			*ui64KeyRecovered = ((uint64_t)maxhii<<24) + maxloi;
+			printf("\nINFO: block %d recovered KEY: %012"PRIx64"\n", uiBlock, *ui64KeyRecovered);
+		}
+	}
 
         crypto1_destroy(states_list);
 
@@ -727,6 +761,7 @@ static void print_usage(FILE *fp, const char *prog_name)
   fprintf(fp, "-p proxmark3_full.log - tries to parse the log file on it's own (mifarecrack.py based), get the values for option -P and invoke it\n");
   fprintf(fp, "-F - tries to fingerprint the input dump (-i) against known cards' data format\n");
   fprintf(fp, "-v verbose_level - verbose level (default is O)\n");
+  fprintf(fp, "-w threshold - use weak card mode with the provided maxhi/lo threshold. Use it if you get 0x03 error.\n");
   fprintf(fp, "\n");
 
   fprintf(fp, "Usage examples:\n");
@@ -988,7 +1023,7 @@ int main(int argc, char *argv[])
   // OPTION PROCESSING BLOCK
   // TODO: for WIN32 figure out how to use unistd/posix-compatible Gnu.Getopt.dll (http://getopt.codeplex.com)
   // For WIN32 using VERY limited (modified) Xgetopt (http://www.codeproject.com/KB/cpp/xgetopt.aspx)
-  while ((ch = getopt(argc, argv, "htTDCi:I:o:O:V:R:S:s:v:M:U:d:n:P:p:F:")) != -1) { // -1 or EOF
+  while ((ch = getopt(argc, argv, "htTDCi:I:o:O:V:R:S:s:v:M:U:d:n:P:p:F:w:")) != -1) { // -1 or EOF
     switch (ch) {
         // Name for the extended dump
       case 'n':
@@ -1044,6 +1079,17 @@ int main(int argc, char *argv[])
           bfOpts[ch] = true;
         }
         break;
+
+      case 'w':
+    	if (!(i = atoi(optarg)) || (i < 1)) {
+    		WARN("non-supported threshold value (%s)", optarg);
+    	} else {
+    		printf("TRESHOLD: %d\n",i);
+    		weak_mifare_mode = true;
+    		weak_mifare_threshold = i;
+    	}
+    	break;
+
       case 'M':
         // Mifare Classic type option
         if (!(i = atoi(optarg)) || (!IS_MIFARE_CLASSIC_1K(i) && !IS_MIFARE_CLASSIC_4K(i))) {
@@ -1601,6 +1647,7 @@ int main(int argc, char *argv[])
   }
 
   // RECOVER KEYS CODE-BLOCK
+  
   printf("\nRECOVER: ");
   for (i = 0; i < max_sectors; i++) {
     uint64_t crntRecovKey = 0;
@@ -1647,6 +1694,9 @@ int main(int argc, char *argv[])
         memset((void *)arrSpoofEntries, 0, sizeof(arrSpoofEntries));
         numSpoofEntries = 0;
         numAuthAttempts = 0;
+        numHit4 = 0;
+        memset((void*)hicnt, 0, sizeof(hicnt));
+        memset((void*)locnt, 0, sizeof(locnt));
 
         // Recovery loop for current key-type of current sector
         do {
@@ -1661,13 +1711,14 @@ int main(int argc, char *argv[])
             printf("    key: %012"PRIx64"\n", crntRecovKey);
             printf("  block: %02x\n", block);
             printf("diff Nt: %d\n", numSpoofEntries);
+            printf("   hit4: %d\n", numHit4);
             printf("  auths: %d\n", numAuthAttempts);
             printf("-----------------------------------------------------\n");
           }
 
           uiErrCode = mfcuk_key_recovery_block(pnd, tag_recover_verify.uid, crntRecovKey, j, tag_recover_verify.type, block, &ui64KeyRecovered);
 
-          if (uiErrCode != MFCUK_OK_KEY_RECOVERED && uiErrCode != MFCUK_SUCCESS && uiErrCode != MFCUK_FAIL_AUTH) {
+          if (uiErrCode != MFCUK_OK_KEY_RECOVERED && uiErrCode != MFCUK_SUCCESS && uiErrCode != MFCUK_FAIL_AUTH && weak_mifare_threshold == false) {
             ERR("mfcuk_key_recovery_block() (error code=0x%02x)", uiErrCode);
           }
 

@@ -1,0 +1,8 @@
+mfcuk does not handle cards that always respond with NACK to failed auth attempts. This is the cause of 0x03 error on some cards.
+
+@Stewart8 solved the problem (https://github.com/nfc-tools/mfcuk/issues/39) and I applied his patch to mfcuk source with some adjustments
+-no more crashes with 1M+ candidates
+-configurable maxhi/lo threshold
+-"weak card mode" can be turned on/off selectively
+
+To use mfcuk in weak card mode add '-w threshold' to cmdline args. Suggested threshold val: >=6

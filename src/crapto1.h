@@ -20,10 +20,11 @@
 #ifndef CRAPTO1_INCLUDED
 #define CRAPTO1_INCLUDED
 #include <stdint.h>
+#include <stdbool.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+  extern bool weak_mifare_mode;
   struct Crypto1State {uint32_t odd, even;};
   struct Crypto1State *crypto1_create(uint64_t);
   void crypto1_destroy(struct Crypto1State *);

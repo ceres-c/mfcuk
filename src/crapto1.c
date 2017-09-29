@@ -31,6 +31,7 @@ static void __attribute__((constructor)) fill_lut(void)
 #define filter(x) (filterlut[(x) & 0xfffff])
 #endif
 
+bool weak_mifare_mode = false;
 static void quicksort(uint32_t *const start, uint32_t *const stop)
 {
   uint32_t *it = start + 1, *rit = stop;
@@ -438,11 +439,13 @@ check_pfx_parity(uint32_t prefix, uint32_t rresp, uint8_t parities[8][8],
     nr = ks1 ^(prefix | c << 5);
     rr = ks2 ^ rresp;
 
-    good &= parity(nr & 0x000000ff) ^ parities[c][3] ^ BIT(ks2, 24);
-    good &= parity(rr & 0xff000000) ^ parities[c][4] ^ BIT(ks2, 16);
-    good &= parity(rr & 0x00ff0000) ^ parities[c][5] ^ BIT(ks2,  8);
-    good &= parity(rr & 0x0000ff00) ^ parities[c][6] ^ BIT(ks2,  0);
-    good &= parity(rr & 0x000000ff) ^ parities[c][7] ^ ks3;
+    if (!weak_mifare_mode) {
+    	good &= parity(nr & 0x000000ff) ^ parities[c][3] ^ BIT(ks2, 24);
+    	good &= parity(rr & 0xff000000) ^ parities[c][4] ^ BIT(ks2, 16);
+    	good &= parity(rr & 0x00ff0000) ^ parities[c][5] ^ BIT(ks2,  8);
+    	good &= parity(rr & 0x0000ff00) ^ parities[c][6] ^ BIT(ks2,  0);
+    	good &= parity(rr & 0x000000ff) ^ parities[c][7] ^ ks3;
+    }
   }
 
   return sl + good;
@@ -466,7 +469,7 @@ lfsr_common_prefix(uint32_t pfx, uint32_t rr, uint8_t ks[8], uint8_t par[8][8]) 
   odd = lfsr_prefix_ks(ks, 1);
   even = lfsr_prefix_ks(ks, 0);
 
-  s = statelist = malloc((sizeof *statelist) << 20);
+  s = statelist = malloc((sizeof *statelist) << 24);
   if (!s || !odd || !even) {
     free(odd);
     free(even);
